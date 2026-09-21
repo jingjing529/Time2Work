@@ -1,0 +1,38 @@
+"use client";
+import {useState,useRef,useEffect,type FormEvent} from 'react';
+import type {Workspace} from '../lib/workspace';
+import {validateEvent,type ScheduledEvent,type MeetingSelection} from '../lib/events';
+import {matchAvailability} from '../lib/availability-matching';
+import {weeklyAvailability} from '../lib/weekly-availability';
+import s from './OrgCalendar.module.css';
+export const dateKey=(d:Date)=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+const time=(n:number)=>`${String(Math.floor(n)).padStart(2,'0')}:${String(Math.round(n%1*60)).padStart(2,'0')}`;
+const weekday=(date:string)=>new Date(`${date}T12:00`).toLocaleDateString('en-US',{weekday:'short'});
+export async function syncGoogle(event:ScheduledEvent):Promise<ScheduledEvent>{try{const r=await fetch('/api/calendar',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(event)});const result=await r.json();if(!r.ok)throw new Error(result.error);return {...event,googleStatus:'synced',googleLink:result.link,syncError:undefined};}catch(e){return {...event,googleStatus:'failed',syncError:e instanceof Error?e.message:'Google sync failed.'};}}
+export default function EventComposer({selection,data,onSave,onClose,onCommit}:{onCommit?:(data:Workspace)=>Promise<boolean>;selection:MeetingSelection;data:Workspace;onSave:(data:Workspace)=>boolean;onClose:()=>void}){
+ const dialog=useRef<HTMLDialogElement>(null);
+ useEffect(()=>{dialog.current?.showModal();},[]);
+ const [date,setDate]=useState(()=>{const d=new Date();d.setDate(d.getDate()+1);while(!selection.days.includes(d.toLocaleDateString('en-US',{weekday:'short'})))d.setDate(d.getDate()+1);return dateKey(d);});
+ const [start,setStart]=useState(time(selection.start));const [end,setEnd]=useState(time(selection.duration?Math.min(selection.end,selection.start+selection.duration/60):selection.end));
+ const [ids,setIds]=useState(selection.memberIds);const guestMeeting=selection.memberIds.some(id=>data.members.find(m=>m.id===id)?.role==='guest');const google=!!data.calendarId&&!guestMeeting;
+ const [busy,setBusy]=useState(false);const [error,setError]=useState('');const [saved,setSaved]=useState<ScheduledEvent|null>(null);
+ const availability=weeklyAvailability(data);const hours=(t:string)=>Number(t.slice(0,2))+Number(t.slice(3))/60;
+ async function submit(e:FormEvent<HTMLFormElement>){e.preventDefault();if(busy||saved)return;setError('');const form=new FormData(e.currentTarget);
+ try{
+  const from=new Date(`${date}T${start}`),to=new Date(`${date}T${end}`);
+  if(!date||!selection.days.includes(weekday(date)))throw new Error(`Choose a date on ${selection.days.join(' or ')} to match the selected weekday.`);
+  if(from<=new Date())throw new Error('Choose a future date and time.');
+  if(hours(start)<selection.start||hours(end)>selection.end)throw new Error(`Keep the meeting inside ${time(selection.start)}–${time(selection.end)}.`);
+  const event:ScheduledEvent={id:crypto.randomUUID().replaceAll('-',''),title:String(form.get('title')).trim(),description:String(form.get('description')),start:from.toISOString(),end:to.toISOString(),timeZone:Intl.DateTimeFormat().resolvedOptions().timeZone,participantIds:ids,participantEmails:data.members.filter(m=>ids.includes(m.id)).map(m=>m.email),sendInvites:google,calendarId:google?data.calendarId:undefined,googleStatus:google?'pending':'local'};
+  validateEvent(event);
+  if((selection.requiredIds||[]).some(id=>!ids.includes(id)||!data.members.some(m=>m.id===id&&matchAvailability(availability[m.email]?.[weekday(date)],hours(start),hours(end)).status==='full')))throw new Error('All starred people must attend and be available for the entire meeting.');
+  if(guestMeeting){
+   if(!ids.some(id=>data.members.find(m=>m.id===id)?.role==='guest')||!ids.some(id=>data.members.find(m=>m.id===id)?.role!=='guest'))throw new Error('Select a guest and at least one lab member.');
+   if(data.members.filter(m=>ids.includes(m.id)).some(m=>matchAvailability(availability[m.email]?.[weekday(date)],hours(start),hours(end)).status!=='full'))throw new Error('Every selected person must be available for the entire session.');
+  }
+  if((data.events||[]).some(e=>e.participantIds.some(id=>ids.includes(id))&&Date.parse(e.start)<to.getTime()&&Date.parse(e.end)>from.getTime()))throw new Error('A selected person already has a meeting during this time.');
+  const events=[...(data.events||[]),event];setBusy(true);if(!await (onCommit||onSave)({...data,events}))throw new Error('Could not save to the server.');setSaved(event);
+  if(google){setBusy(true);const result=await syncGoogle(event);if(!onSave({...data,events:events.map(x=>x.id===event.id?result:x)}))setError('Google request finished, but local status could not be saved. Check Google before retrying.');setSaved(result);}
+ }catch(e){setError(e instanceof Error?e.message:'Could not create event.');}finally{setBusy(false);}}
+ return <dialog ref={dialog} className={s.composer} aria-label="Schedule event" onCancel={e=>{e.preventDefault();if(!busy)onClose();}}><header><h2>Schedule event</h2><button disabled={busy} onClick={onClose} aria-label="Close event form">×</button></header>{saved?<><h3>{busy?'Saving to Google…':saved.googleStatus==='failed'?'Saved here · Google needs attention':'Event scheduled'}</h3><p>{saved.title} · {new Date(saved.start).toLocaleString()}</p><p>{saved.googleStatus==='synced'?'Saved to the organization Google Calendar and this site.':saved.googleStatus==='failed'?`${saved.syncError} An admin can retry from Organization Settings.`:'Your event is saved. Open the organization Calendar tab to view it.'}</p><button disabled={busy} onClick={onClose}>Done</button></>:<form onSubmit={submit}><p>{selection.days.join(', ')} · {time(selection.start)}–{time(selection.end)} available window. Choose an exact date and meeting time.</p><label>Event title<input name="title" required maxLength={150} autoFocus placeholder="Team catch-up"/></label><div className={s.fields}><label>Date<input type="date" required min={dateKey(new Date())} value={date} onChange={e=>setDate(e.target.value)}/></label><label>Start<input type="time" required step={900} value={start} onChange={e=>setStart(e.target.value)}/></label><label>End<input type="time" required step={900} value={end} onChange={e=>setEnd(e.target.value)}/></label></div><small>Timezone: {Intl.DateTimeFormat().resolvedOptions().timeZone} · Weekly availability is a guide, not an RSVP.</small><label>Details<textarea name="description" maxLength={5000} placeholder="Agenda or meeting link"/></label><fieldset><legend>Participants · {ids.length} selected</legend><div className={s.participants}>{data.members.map(m=>{const status=hours(end)>hours(start)?matchAvailability(availability[m.email]?.[weekday(date)],hours(start),hours(end)).status:'unknown';return <label key={m.id}><input type="checkbox" checked={ids.includes(m.id)} disabled={selection.requiredIds?.includes(m.id)} onChange={()=>setIds(ids.includes(m.id)?ids.filter(id=>id!==m.id):[...ids,m.id])}/><span>{m.name}<small>{status==='full'?'Available':status==='partial'?'Partial overlap':status==='none'?'Unavailable':'Not submitted'}</small></span></label>;})}</div></fieldset>{google?<p>Automatically saves to the organization Google Calendar and sends invitations to all selected participants. Real email addresses are required.</p>:<p>This event will appear in the site Calendar.</p>}<button className={s.primary} disabled={busy||!ids.length} type="submit">{google?'Create event & send invitations':'Create event'}</button></form>}{error&&<p role="alert">{error}</p>}</dialog>;
+}

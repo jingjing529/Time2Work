@@ -1,0 +1,8 @@
+"use client";
+import {useState} from 'react';
+import s from './MemberTags.module.css';
+export default function MemberTags({tags,name,editable,onChange,options=[]}:{options?:string[];tags:string[];name:string;editable:boolean;onChange:(tags:string[])=>void}) {
+ const [draft,setDraft]=useState('');const [editing,setEditing]=useState(false);
+ function add(){const typed=draft.trim().replace(/\s+/g,' ');const tag=options.find(t=>t.toLowerCase()===typed.toLowerCase())||typed;if(tag&&!tags.some(t=>t.toLowerCase()===tag.toLowerCase()))onChange([...tags,tag]);setDraft('');setEditing(false);}
+ return <div className={s.tags}>{tags.map(tag=><div className={s.tag} key={tag}>{tag}{editable&&<button type="button" aria-label={`Remove tag ${tag} from ${name}`} onClick={()=>onChange(tags.filter(t=>t!==tag))}>×</button>}</div>)}{editable&&!editing&&<button type="button" className={s.edit} onClick={()=>setEditing(true)} aria-label={`Edit tags for ${name}`}>＋ Tag</button>}{editable&&editing&&<div className={s.add}>{options.some(t=>!tags.includes(t))&&<select aria-label={`Existing tags for ${name}`} value="" onChange={e=>{if(e.target.value){onChange([...tags,e.target.value]);setEditing(false);}}}><option value="">Choose a tag…</option>{options.filter(t=>!tags.includes(t)).map(t=><option key={t} value={t}>{t}</option>)}</select>}<input aria-label={`New tag for ${name}`} placeholder="New tag…" maxLength={32} value={draft} onChange={e=>setDraft(e.target.value)} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();add();}}}/><button type="button" aria-label={`Add tag for ${name}`} disabled={!draft.trim()} onClick={add}>＋</button><button type="button" aria-label={`Close tag editor for ${name}`} onClick={()=>setEditing(false)}>×</button></div>}</div>;
+}

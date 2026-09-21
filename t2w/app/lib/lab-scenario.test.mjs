@@ -1,0 +1,45 @@
+import {test,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+const cwd=process.cwd(),dir=mkdtempSync(join(tmpdir(),'t2w-lab-'));process.chdir(dir);
+const {regularAccess,inviteOrganization}=await import('./organization-access.ts');
+after(()=>{process.chdir(cwd);rmSync(dir,{recursive:true,force:true});});
+const admin={email:'admin@lab.invalid',name:'Lab admin'},id=randomUUID();
+const workspace={members:[{...admin,id:'admin',role:'admin'}],weeklyAvailability:{},events:[],tasks:[],notices:[],description:'',cover:'',avatar:'',calendarId:''};
+const org={id,name:'Lab scenario',code:'LAB',passwordHash:'a'.repeat(64)};
+const call=(action,user=admin,extra={})=>regularAccess({id,action,...extra},user);
+test('lab: ten independent members, restricted guest, assignment and personal calendars',()=>{
+ call('org-read',admin,{org,workspace,accessKey:'b'.repeat(64)});
+ const memberLink=call('org-invite',admin,{role:'member'}).token;
+ const users=Array.from({length:10},(_,i)=>({email:`lab${i}@lab.invalid`,name:`Lab member ${i+1}`}));
+ for(const [i,user] of users.entries()){
+  call('org-join',user,{token:memberLink});
+  call('org-save',user,{patch:{weeklyAvailability:{[user.email]:{Mon:[{startHour:9+i%3,endHour:12+i%3}]}}}});
+ }
+ const guest={email:'guest@lab.invalid',name:'Research guest'};
+ const guestLink=call('org-invite',admin,{role:'guest'}).token;
+ assert.equal(inviteOrganization(guestLink).role,'guest');
+ call('org-join',guest,{token:guestLink,role:'admin'});
+ call('org-save',guest,{patch:{weeklyAvailability:{[guest.email]:{Mon:[{startHour:10,endHour:12}]}}}});
+ const all=call('org-read').workspace;
+ assert.equal(all.members.length,12);assert.equal(Object.keys(all.weeklyAvailability).length,11);
+ const privateData=call('org-read',guest);
+ assert.equal(privateData.role,'guest');assert.equal(privateData.workspace.members.length,1);
+ assert.deepEqual(Object.keys(privateData.workspace.weeklyAvailability),[guest.email]);
+ assert.throws(()=>call('org-invite',guest,{role:'member'}),/Admin/);
+ assert.throws(()=>call('org-save',guest,{patch:{members:[]}}),/Admin/);
+ assert.throws(()=>call('org-save',guest,{patch:{weeklyAvailability:{[users[0].email]:{}}}}),/own availability/);
+ const selected=all.members.filter(m=>[users[0].email,guest.email].includes(m.email));
+ const event={id:'c'.repeat(32),title:'Lab session',start:'2026-10-05T17:00:00Z',end:'2026-10-05T18:00:00Z',timeZone:'America/Los_Angeles',description:'Research visit',participantIds:selected.map(m=>m.id),participantEmails:selected.map(m=>m.email),sendInvites:false,googleStatus:'local'};
+ call('org-save',admin,{patch:{events:[event]}});
+ assert.equal(call('org-read',guest).workspace.events.length,1);
+ assert.deepEqual(call('org-read',guest).workspace.events[0].participantNames,selected.map(m=>m.name));
+ assert.equal(call('org-read',users[0]).workspace.events.length,1);
+ assert.equal(call('org-read',users[1]).workspace.events.length,0);
+ assert.throws(()=>call('org-save',guest,{patch:{events:[]}}),/Admin/);
+ assert.throws(()=>call('org-save',admin,{patch:{events:[event,{...event,id:'d'.repeat(32)}]}}),/already has/);
+ assert.throws(()=>call('org-read',{name:'Stranger',email:'stranger@lab.invalid'}),/not a member/);
+});

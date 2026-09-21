@@ -1,0 +1,47 @@
+import {test,after} from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+const cwd=process.cwd(),temp=mkdtempSync(join(tmpdir(),'t2w-quick-test-'));process.chdir(temp);
+const {quickAccess,redeemInvite}=await import('./organization-access.ts');
+after(()=>{process.chdir(cwd);rmSync(temp,{recursive:true,force:true});});
+test('quick create, anonymous invite, personal password, shared updates and owner isolation',()=>{
+ const created=quickAccess({action:'quick-create',name:'Study group'}),id=created.org.id;
+ assert.ok(created.token);assert.equal(redeemInvite(created.token).org.quick,true);
+ const viewer={id,token:created.token};assert.equal(quickAccess({...viewer,action:'quick-read'}).workspace.members.length,0);
+ assert.throws(()=>quickAccess({id,action:'quick-read'}));
+ const alice=quickAccess({...viewer,action:'quick-identify',name:'Alice',password:'alice-password'});
+ const bob=quickAccess({...viewer,action:'quick-identify',name:'Bob',password:'bob-password'});
+ assert.equal(alice.identity.name,'Alice');assert.notEqual(alice.identity.email,bob.identity.email);
+ assert.throws(()=>quickAccess({...viewer,action:'quick-identify',name:'Alice',password:'incorrect-password'}));
+ assert.equal(quickAccess({...viewer,action:'quick-identify',name:'Alice',password:'alice-password'}).identity.email,alice.identity.email);
+ quickAccess({id,session:alice.session,action:'quick-save',patch:{weeklyAvailability:{[alice.identity.email]:{Sun:[{startHour:10,endHour:12}]}}}});
+ quickAccess({id,session:bob.session,action:'quick-save',patch:{weeklyAvailability:{[bob.identity.email]:{Sat:[{startHour:9,endHour:11}]}}}});
+ const shared=quickAccess({id,accessKey:created.org.accessKey,action:'quick-read'}).workspace;
+ assert.equal(shared.members.length,2);assert.ok(shared.weeklyAvailability[alice.identity.email].Sun);assert.ok(shared.weeklyAvailability[bob.identity.email].Sat);
+ assert.throws(()=>quickAccess({id,session:bob.session,action:'quick-save',patch:{weeklyAvailability:{[alice.identity.email]:{Sun:[]}}}}));
+ assert.throws(()=>quickAccess({...viewer,action:'quick-save',patch:{members:[]}}));
+ assert.throws(()=>quickAccess({...viewer,action:'quick-save',patch:{weeklyAvailability:{x:{Mon:[]}}}}));
+});
+test('dated quick meet accepts optional password and keeps separate calendar dates',()=>{
+ const created=quickAccess({action:'quick-create',name:'Weekend meetup',dates:['2026-10-03','2026-10-10']});
+ const viewer={id:created.org.id,token:created.token};
+ const guest=quickAccess({...viewer,action:'quick-identify',name:'Sam'});
+ assert.equal(quickAccess({...viewer,action:'quick-identify',name:'Sam'}).identity.email,guest.identity.email);
+ quickAccess({...viewer,session:guest.session,action:'quick-save',patch:{weeklyAvailability:{[guest.identity.email]:{'2026-10-03':[{startHour:9,endHour:11}],'2026-10-10':[]}}}});
+ const saved=quickAccess({...viewer,action:'quick-read'}).workspace.weeklyAvailability[guest.identity.email];
+ assert.equal(saved['2026-10-03'].length,1);assert.equal(saved['2026-10-10'].length,0);
+ assert.throws(()=>quickAccess({...viewer,session:guest.session,action:'quick-save',patch:{weeklyAvailability:{[guest.identity.email]:{Sat:[]}}}}));
+ assert.throws(()=>quickAccess({action:'quick-create',name:'Invalid dates',dates:['2026-02-30']}));
+});
+test('quick meet keeps timezone and bounds, rejecting availability outside the chosen window',()=>{
+ const created=quickAccess({action:'quick-create',name:'Evening',dates:['2026-10-03'],timeZone:'Asia/Shanghai',startHour:18,endHour:24});
+ assert.equal(created.org.timeZone,'Asia/Shanghai');assert.equal(created.org.endHour,24);
+ const viewer={id:created.org.id,token:created.token},guest=quickAccess({...viewer,action:'quick-identify',name:'Jo'});
+ const save=slots=>quickAccess({...viewer,session:guest.session,action:'quick-save',patch:{weeklyAvailability:{[guest.identity.email]:{'2026-10-03':slots}}}});
+ assert.doesNotThrow(()=>save([{startHour:22,endHour:24}]));
+ assert.throws(()=>save([{startHour:17,endHour:19}]));
+ assert.throws(()=>quickAccess({action:'quick-create',name:'Invalid',startHour:20,endHour:9}));
+ assert.throws(()=>quickAccess({action:'quick-create',name:'Invalid',timeZone:'Invalid/Zone'}));
+});
