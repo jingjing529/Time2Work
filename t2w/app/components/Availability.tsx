@@ -2,26 +2,24 @@
 
 import { useState, useRef, useCallback } from "react";
 
-import { updateAvailability, type TimeSlot } from "../lib/availability";
+interface TimeSlot {
+  day: number; // 0-6 (Mon-Sun)
+  startHour: number;
+  endHour: number;
+}
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const HOURS = Array.from({ length: 11 }, (_, i) => i + 8); // 8am to 6pm
 
-export default function Availability({slots, onChange,days=DAYS,startHour:rangeStart=8,endHour:rangeEnd=19}: {startHour?:number;endHour?:number;days?:string[];slots?: TimeSlot[]; onChange?: (slots: TimeSlot[]) => void} = {}) {
-  const HOURS=Array.from({length:rangeEnd-rangeStart},(_,i)=>i+rangeStart);
-  const [localSlots, setLocalSlots] = useState<TimeSlot[]>([]);
-  const selectedSlots = slots ?? localSlots;
-  const setSelectedSlots = (value: TimeSlot[] | ((prev: TimeSlot[]) => TimeSlot[])) => {
-    const next = typeof value === "function" ? value(selectedSlots) : value;
-    if (onChange) onChange(next); else setLocalSlots(next);
-  };
-  const [dragMode, setDragMode] = useState<"add" | "remove">("add");
+export default function Availability() {
+  const [selectedSlots, setSelectedSlots] = useState<TimeSlot[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState<{ day: number; hour: number } | null>(null);
   const [dragEnd, setDragEnd] = useState<{ day: number; hour: number } | null>(null);
   const [showManualInput, setShowManualInput] = useState(false);
   const [manualDay, setManualDay] = useState(0);
-  const [manualStartTime, setManualStartTime] = useState(`${String(rangeStart).padStart(2,"0")}:00`);
-  const [manualEndTime, setManualEndTime] = useState(`${String(rangeEnd).padStart(2,"0")}:00`);
+  const [manualStartTime, setManualStartTime] = useState("09:00");
+  const [manualEndTime, setManualEndTime] = useState("17:00");
   const calendarRef = useRef<HTMLDivElement>(null);
 
   // Check if a specific hour slot is selected
@@ -50,7 +48,6 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
 
   // Handle mouse down on a cell
   const handleMouseDown = (day: number, hour: number) => {
-    setDragMode(isSlotSelected(day, hour) ? "remove" : "add");
     setIsDragging(true);
     setDragStart({ day, hour });
     setDragEnd({ day, hour });
@@ -69,11 +66,56 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
       const minHour = Math.min(dragStart.hour, dragEnd.hour);
       const maxHour = Math.max(dragStart.hour, dragEnd.hour) + 1;
 
-      setSelectedSlots((prev) => updateAvailability(prev, {
-        day: dragStart.day,
-        startHour: minHour,
-        endHour: maxHour,
-      }, dragMode));
+      // Check if we're clicking on an already selected slot
+      const existingSlotIndex = selectedSlots.findIndex(
+        (slot) =>
+          slot.day === dragStart.day &&
+          dragStart.hour >= slot.startHour &&
+          dragStart.hour < slot.endHour
+      );
+
+      if (existingSlotIndex !== -1 && dragStart.hour === dragEnd.hour) {
+        // Remove the slot if clicking on it
+        setSelectedSlots((prev) => prev.filter((_, i) => i !== existingSlotIndex));
+      } else {
+        // Add or merge new slot
+        const newSlot: TimeSlot = {
+          day: dragStart.day,
+          startHour: minHour,
+          endHour: maxHour,
+        };
+
+        setSelectedSlots((prev) => {
+          // Remove overlapping slots on the same day
+          const filtered = prev.filter(
+            (slot) =>
+              slot.day !== newSlot.day ||
+              slot.endHour <= newSlot.startHour ||
+              slot.startHour >= newSlot.endHour
+          );
+
+          // Merge with adjacent slots
+          const sameDaySlots = [...filtered.filter((s) => s.day === newSlot.day), newSlot].sort(
+            (a, b) => a.startHour - b.startHour
+          );
+
+          const merged: TimeSlot[] = [];
+          for (const slot of sameDaySlots) {
+            if (merged.length === 0) {
+              merged.push(slot);
+            } else {
+              const last = merged[merged.length - 1];
+              if (last.endHour >= slot.startHour) {
+                last.endHour = Math.max(last.endHour, slot.endHour);
+              } else {
+                merged.push(slot);
+              }
+            }
+          }
+
+          return [...filtered.filter((s) => s.day !== newSlot.day), ...merged];
+        });
+      }
     }
 
     setIsDragging(false);
@@ -86,8 +128,8 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
     const startHour = parseInt(manualStartTime.split(":")[0]);
     const endHour = parseInt(manualEndTime.split(":")[0]);
 
-    if (startHour >= endHour || startHour < rangeStart || endHour > rangeEnd) {
-      alert(`Please enter valid times between ${rangeStart}:00 and ${rangeEnd}:00`);
+    if (startHour >= endHour || startHour < 8 || endHour > 18) {
+      alert("Please enter valid times between 8:00 and 18:00");
       return;
     }
 
@@ -97,7 +139,34 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
       endHour,
     };
 
-    setSelectedSlots((prev) => updateAvailability(prev, newSlot, "add"));
+    setSelectedSlots((prev) => {
+      const filtered = prev.filter(
+        (slot) =>
+          slot.day !== newSlot.day ||
+          slot.endHour <= newSlot.startHour ||
+          slot.startHour >= newSlot.endHour
+      );
+
+      const sameDaySlots = [...filtered.filter((s) => s.day === newSlot.day), newSlot].sort(
+        (a, b) => a.startHour - b.startHour
+      );
+
+      const merged: TimeSlot[] = [];
+      for (const slot of sameDaySlots) {
+        if (merged.length === 0) {
+          merged.push(slot);
+        } else {
+          const last = merged[merged.length - 1];
+          if (last.endHour >= slot.startHour) {
+            last.endHour = Math.max(last.endHour, slot.endHour);
+          } else {
+            merged.push(slot);
+          }
+        }
+      }
+
+      return [...filtered.filter((s) => s.day !== newSlot.day), ...merged];
+    });
 
     setShowManualInput(false);
   };
@@ -109,14 +178,13 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
 
   // Format hour for display
   const formatHour = (hour: number) => {
-    if (hour === 0 || hour === 24) return "12 AM";
     if (hour === 12) return "12 PM";
     if (hour > 12) return `${hour - 12} PM`;
     return `${hour} AM`;
   };
 
   return (
-    <div className="text-[var(--ink,#17243c)] bg-[var(--surface,#fff)] rounded-2xl shadow-sm border border-[var(--line,#e3e8ef)] p-6">
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
@@ -136,22 +204,22 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
             </svg>
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-[var(--ink,#17243c)]">My Availability</h2>
-            <p className="text-sm text-[var(--muted,#667085)]">Click or drag empty slots to add; green slots to remove</p>
+            <h2 className="text-xl font-semibold text-gray-900">My Availability</h2>
+            <p className="text-sm text-gray-500">Drag to select your available time slots</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowManualInput(!showManualInput)}
-            className="px-4 py-2 text-sm font-medium text-[var(--accent,#4285f4)] bg-[#4285F4]/10 rounded-lg hover:bg-[#4285F4]/20 transition-colors"
+            className="px-4 py-2 text-sm font-medium text-[#4285F4] bg-[#4285F4]/10 rounded-lg hover:bg-[#4285F4]/20 transition-colors"
           >
             {showManualInput ? "Hide Input" : "Manual Input"}
           </button>
           {selectedSlots.length > 0 && (
             <button
               onClick={handleClearAll}
-              className="px-4 py-2 text-sm font-medium text-[#e36b75] bg-[#e36b75]/10 rounded-lg hover:bg-[#e36b75]/20 transition-colors"
+              className="px-4 py-2 text-sm font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors"
             >
               Clear All
             </button>
@@ -161,17 +229,17 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
 
       {/* Manual Input Panel */}
       {showManualInput && (
-        <div className="mb-6 p-4 bg-[var(--canvas,#f7f9fc)] rounded-xl border border-[var(--line,#e3e8ef)]">
-          <h3 className="text-sm font-medium text-[var(--ink,#17243c)] mb-3">Add Time Slot Manually</h3>
+        <div className="mb-6 p-4 bg-gray-50 rounded-xl border border-gray-200">
+          <h3 className="text-sm font-medium text-gray-700 mb-3">Add Time Slot Manually</h3>
           <div className="flex flex-wrap items-end gap-4">
             <div>
-              <label className="block text-xs text-[var(--muted,#667085)] mb-1">Day</label>
+              <label className="block text-xs text-gray-500 mb-1">Day</label>
               <select
                 value={manualDay}
                 onChange={(e) => setManualDay(parseInt(e.target.value))}
-                className="px-3 py-2 bg-[var(--surface,#fff)] border border-[var(--line,#e3e8ef)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/50 focus:border-[#4285F4]"
+                className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/50 focus:border-[#4285F4]"
               >
-                {days.map((day, i) => (
+                {DAYS.map((day, i) => (
                   <option key={day} value={i}>
                     {day}
                   </option>
@@ -179,13 +247,13 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
               </select>
             </div>
             <div>
-              <label className="block text-xs text-[var(--muted,#667085)] mb-1">Start Time</label>
+              <label className="block text-xs text-gray-500 mb-1">Start Time</label>
               <select
                 value={manualStartTime}
                 onChange={(e) => setManualStartTime(e.target.value)}
-                className="px-3 py-2 bg-[var(--surface,#fff)] border border-[var(--line,#e3e8ef)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/50 focus:border-[#4285F4]"
+                className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/50 focus:border-[#4285F4]"
               >
-                {HOURS.map((hour) => (
+                {HOURS.slice(0, -1).map((hour) => (
                   <option key={hour} value={`${hour.toString().padStart(2, "0")}:00`}>
                     {formatHour(hour)}
                   </option>
@@ -193,13 +261,13 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
               </select>
             </div>
             <div>
-              <label className="block text-xs text-[var(--muted,#667085)] mb-1">End Time</label>
+              <label className="block text-xs text-gray-500 mb-1">End Time</label>
               <select
                 value={manualEndTime}
                 onChange={(e) => setManualEndTime(e.target.value)}
-                className="px-3 py-2 bg-[var(--surface,#fff)] border border-[var(--line,#e3e8ef)] rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/50 focus:border-[#4285F4]"
+                className="px-3 py-2 bg-white border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#4285F4]/50 focus:border-[#4285F4]"
               >
-                {HOURS.map(hour=>hour+1).map((hour) => (
+                {HOURS.slice(1).map((hour) => (
                   <option key={hour} value={`${hour.toString().padStart(2, "0")}:00`}>
                     {formatHour(hour)}
                   </option>
@@ -226,12 +294,12 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
         <div className="overflow-x-auto">
           <div className="min-w-[700px]">
             {/* Day Headers */}
-            <div className="grid gap-1 mb-1" style={{gridTemplateColumns:`64px repeat(${days.length}, minmax(64px,1fr))`}}>
+            <div className="grid grid-cols-8 gap-1 mb-1">
               <div className="h-10"></div>
-              {days.map((day) => (
+              {DAYS.map((day) => (
                 <div
                   key={day}
-                  className="h-10 flex items-center justify-center text-sm font-semibold text-[var(--ink,#17243c)] bg-[var(--canvas,#f7f9fc)] rounded-lg"
+                  className="h-10 flex items-center justify-center text-sm font-semibold text-gray-700 bg-gray-50 rounded-lg"
                 >
                   {day}
                 </div>
@@ -240,37 +308,28 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
 
             {/* Time Rows */}
             {HOURS.map((hour) => (
-              <div key={hour} className="grid gap-1 mb-1" style={{gridTemplateColumns:`64px repeat(${days.length}, minmax(64px,1fr))`}}>
+              <div key={hour} className="grid grid-cols-8 gap-1 mb-1">
                 {/* Time Label */}
-                <div className="h-12 flex items-center justify-end pr-3 text-xs text-[var(--muted,#667085)]">
+                <div className="h-12 flex items-center justify-end pr-3 text-xs text-gray-500">
                   {formatHour(hour)}
                 </div>
 
                 {/* Day Cells */}
-                {days.map((_, dayIndex) => {
+                {DAYS.map((_, dayIndex) => {
                   const isSelected = isSlotSelected(dayIndex, hour);
                   const isDragSelected = isInDragSelection(dayIndex, hour);
 
                   return (
-                    <button
-                      type="button"
-                      aria-label={`${days[dayIndex]} ${formatHour(hour)} - ${formatHour(hour + 1)}`}
-                      aria-pressed={isDragSelected ? dragMode === "add" : isSelected}
+                    <div
                       key={`${dayIndex}-${hour}`}
                       className={`h-12 rounded-lg border-2 cursor-pointer transition-all duration-100 ${
-                        isDragSelected
-                          ? dragMode === "remove"
-                            ? "bg-[color-mix(in_srgb,var(--ink,#17243c)_8%,var(--surface,#fff))] border-[var(--line,#e3e8ef)] border-dashed"
-                            : "bg-[#34A853]/50 border-[#34A853]/70"
-                          : isSelected
+                        isSelected
                           ? "bg-[#34A853] border-[#34A853] shadow-sm"
-
-                          : "bg-[var(--canvas,#f7f9fc)] border-transparent hover:bg-[color-mix(in_srgb,var(--ink,#17243c)_8%,var(--surface,#fff))] hover:border-[var(--line,#e3e8ef)]"
+                          : isDragSelected
+                          ? "bg-[#34A853]/50 border-[#34A853]/70"
+                          : "bg-gray-50 border-transparent hover:bg-gray-100 hover:border-gray-200"
                       }`}
-                      onMouseDown={(event) => { if (event.button === 0) handleMouseDown(dayIndex, hour); }}
-                      onClick={(event) => {
-                        if (event.detail === 0) setSelectedSlots((prev) => updateAvailability(prev, {day: dayIndex, startHour: hour, endHour: hour + 1}, isSelected ? "remove" : "add"));
-                      }}
+                      onMouseDown={() => handleMouseDown(dayIndex, hour)}
                       onMouseEnter={() => handleMouseEnter(dayIndex, hour)}
                     />
                   );
@@ -282,21 +341,21 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
       </div>
 
       {/* Legend & Summary */}
-      <div className="mt-6 pt-4 border-t border-[var(--line,#e3e8ef)]">
+      <div className="mt-6 pt-4 border-t border-gray-100">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 rounded bg-[#34A853]"></div>
-              <span className="text-sm text-[var(--muted,#667085)]">Available</span>
+              <span className="text-sm text-gray-600">Available</span>
             </div>
             <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded bg-[color-mix(in_srgb,var(--ink,#17243c)_8%,var(--surface,#fff))] border border-[var(--line,#e3e8ef)]"></div>
-              <span className="text-sm text-[var(--muted,#667085)]">Unavailable</span>
+              <div className="w-4 h-4 rounded bg-gray-100 border border-gray-200"></div>
+              <span className="text-sm text-gray-600">Unavailable</span>
             </div>
           </div>
 
           {selectedSlots.length > 0 && (
-            <div className="text-sm text-[var(--muted,#667085)]">
+            <div className="text-sm text-gray-500">
               {selectedSlots.length} time slot{selectedSlots.length > 1 ? "s" : ""} selected
             </div>
           )}
@@ -305,19 +364,18 @@ export default function Availability({slots, onChange,days=DAYS,startHour:rangeS
         {/* Selected Slots Summary */}
         {selectedSlots.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-2">
-            {[...selectedSlots]
+            {selectedSlots
               .sort((a, b) => a.day - b.day || a.startHour - b.startHour)
               .map((slot, i) => (
                 <div
                   key={i}
-                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-[#34A853]/10 text-[var(--available-ink,#279747)] rounded-full text-sm font-medium"
+                  className="inline-flex items-center gap-2 px-3 py-1.5 bg-[#34A853]/10 text-[#34A853] rounded-full text-sm font-medium"
                 >
                   <span>
-                    {days[slot.day]} {formatHour(slot.startHour)} - {formatHour(slot.endHour)}
+                    {DAYS[slot.day]} {formatHour(slot.startHour)} - {formatHour(slot.endHour)}
                   </span>
                   <button
-                    aria-label={`Remove ${days[slot.day]} ${formatHour(slot.startHour)} - ${formatHour(slot.endHour)}`}
-                    onClick={() => setSelectedSlots((prev) => prev.filter((item) => item !== slot))}
+                    onClick={() => setSelectedSlots((prev) => prev.filter((_, idx) => idx !== i))}
                     className="hover:bg-[#34A853]/20 rounded-full p-0.5 transition-colors"
                   >
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

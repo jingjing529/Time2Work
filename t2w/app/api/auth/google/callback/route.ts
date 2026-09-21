@@ -21,13 +21,6 @@ export async function GET(req: NextRequest) {
       return NextResponse.redirect(errUrl);
     }
 
-    const state = url.searchParams.get("state");
-    if (!state || state !== req.cookies.get("google_oauth_state")?.value) {
-      const errorUrl = new URL("/", url);
-      errorUrl.searchParams.set("error", "invalid_oauth_state");
-      return NextResponse.redirect(errorUrl);
-    }
-
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
     const redirectUri = process.env.GOOGLE_REDIRECT_URI;
@@ -60,6 +53,7 @@ export async function GET(req: NextRequest) {
     });
 
     const raw = await tokenRes.text();
+    console.log("token response:", tokenRes.status, raw);
 
     if (!tokenRes.ok) {
       const errUrl = new URL("/", url);
@@ -75,11 +69,9 @@ export async function GET(req: NextRequest) {
       token_type: string;
     };
 
+    console.log("Google OAuth tokens:", tokenData);
 
-    const returnTo=req.cookies.get('google_oauth_return')?.value;
-    const res = NextResponse.redirect(new URL(returnTo&&(returnTo.startsWith('/join#token=')||/^\/\?action=(join|create)$/.test(returnTo)||/^\/organizations\/[a-f0-9-]{36}\?google=1$/.test(returnTo))?returnTo:'/', url));
-    res.cookies.delete('google_oauth_return');
-    res.cookies.delete("google_oauth_state");
+    const res = NextResponse.redirect(new URL("/home", url));
     res.cookies.set("google_access_token", tokenData.access_token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
