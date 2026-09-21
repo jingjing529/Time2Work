@@ -24,7 +24,7 @@ export async function withOrganizationStorage<T>(input: { action?: string; id?: 
   if (!/^[a-f0-9]{64}$/i.test(process.env.ORGANIZATION_ENCRYPTION_KEY || '')) {
     throw new Error('A 32-byte ORGANIZATION_ENCRYPTION_KEY is required.');
   }
-  pool ??= new Pool({ connectionString: process.env.DATABASE_URL, max: 3, idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000 });
+  pool ??= new Pool({ connectionString: process.env.DATABASE_URL, ...(process.env.DATABASE_SSL_CA ? {ssl:{ca:process.env.DATABASE_SSL_CA,rejectUnauthorized:true}} : {}), max: 3, idleTimeoutMillis: 10000, connectionTimeoutMillis: 10000 });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');

@@ -27,7 +27,7 @@ if (!process.argv.includes('--apply')) {
     const decipher = createDecipheriv('aes-256-gcm', key, bytes.subarray(0, 12));
     decipher.setAuthTag(bytes.subarray(-16)); decipher.update(bytes.subarray(12, -16)); decipher.final();
   }
-  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL, ...(process.env.DATABASE_SSL_CA ? {ssl:{ca:process.env.DATABASE_SSL_CA,rejectUnauthorized:true}} : {}) });
   await client.connect();
   try {
     await client.query('BEGIN');

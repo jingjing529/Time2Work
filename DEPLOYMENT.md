@@ -28,3 +28,7 @@ This importer handles the **new Next.js JSON format only**. The Oracle legacy fo
 Run the schema and transactional/concurrent-write tests against a real staging PostgreSQL database; exercise Google login, admin/member/guest authorization, copied-data counts, encrypted password/invite compatibility and scheduling conflicts. Existing domain tests alone do not verify hosted database behavior. Current whole-array admin edits and Google access-token expiration also need production hardening. Preserve the old site until these checks pass.
 
 References: [Supabase connections](https://supabase.com/docs/guides/database/connecting-to-postgres), [Vercel Postgres](https://vercel.com/docs/postgres).
+
+## Staging verification
+
+Independent Supabase project `povcgzptozqivzjjbxpz` now contains six copied Next.js organizations. TLS certificate validation, concurrent writes from two members, rollback, member write restrictions, guest isolation and exact preservation of all imported documents passed with `scripts/verify-postgres.mjs`. The temporary fixture was removed. Set DATABASE_SSL_CA to the Supabase CA PEM and omit SSL query parameters from DATABASE_URL so pg uses the explicit verified CA configuration.
