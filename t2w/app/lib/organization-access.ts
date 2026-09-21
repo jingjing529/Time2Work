@@ -1,17 +1,18 @@
+import {currentStorage,requireStorageContext} from './postgres-storage.ts';
 import type {Workspace,Member} from "./workspace";
 import {randomUUID,randomBytes,createCipheriv,createDecipheriv,createHash,pbkdf2Sync,timingSafeEqual} from 'node:crypto';
 import {readdirSync,mkdirSync,readFileSync,writeFileSync,existsSync,renameSync} from 'node:fs';
 import path from 'node:path';
 const root=path.join(process.cwd(),'.local','organizations');
 function directory(){mkdirSync(root,{recursive:true,mode:0o700});}
-function key(){directory();const file=path.join(root,'encryption.key');if(!existsSync(file))writeFileSync(file,randomBytes(32),{mode:0o600,flag:'wx'});return readFileSync(file);}
+function key(){if(process.env.ORGANIZATION_ENCRYPTION_KEY){if(!/^[a-f0-9]{64}$/i.test(process.env.ORGANIZATION_ENCRYPTION_KEY))throw new Error('Invalid encryption key.');return Buffer.from(process.env.ORGANIZATION_ENCRYPTION_KEY,'hex');}if(process.env.DATABASE_URL||process.env.VERCEL)throw new Error('Encryption key required.');directory();const file=path.join(root,'encryption.key');if(!existsSync(file))writeFileSync(file,randomBytes(32),{mode:0o600,flag:'wx'});return readFileSync(file);}
 function encrypt(value:string){const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',key(),iv);return Buffer.concat([iv,cipher.update(value,'utf8'),cipher.final(),cipher.getAuthTag()]).toString('base64url');}
 function decrypt(value:string){const bytes=Buffer.from(value,'base64url'),decipher=createDecipheriv('aes-256-gcm',key(),bytes.subarray(0,12));decipher.setAuthTag(bytes.subarray(-16));return Buffer.concat([decipher.update(bytes.subarray(12,-16)),decipher.final()]).toString('utf8');}
 type RecordData={roleInvites?:Record<string,{role:"member"|"guest";expires:number}>;accessHash:string;org:{id:string;name:string;code:string;passwordHash:string;quick?:boolean;dates?:string[];timeZone?:string;startHour?:number;endHour?:number};guests?:Record<string,{member:Member;passwordHash:string}>;sessions?:Record<string,{email:string;expires:number}>;workspace:Record<string,unknown>;password?:string;inviteHash?:string;inviteSecret?:string;expires?:number};
 const hash=(v:string)=>createHash('sha256').update(v).digest('hex');
 function file(id:string){if(!/^[a-f0-9-]{36}$/.test(id))throw new Error('Invalid organization.');directory();return path.join(root,`${id}.json`);}
-function save(id:string,data:RecordData){const target=file(id),tmp=`${target}.${randomBytes(6).toString('hex')}.tmp`;writeFileSync(tmp,JSON.stringify(data),{mode:0o600});renameSync(tmp,target);}
-function load(id:string):RecordData|null{const target=file(id);return existsSync(target)?JSON.parse(readFileSync(target,'utf8')):null;}
+function save(id:string,data:RecordData){requireStorageContext();const db=currentStorage();if(db){db.records.set(id,data);db.dirty.add(id);return;}const target=file(id),tmp=`${target}.${randomBytes(6).toString('hex')}.tmp`;writeFileSync(tmp,JSON.stringify(data),{mode:0o600});renameSync(tmp,target);}
+function load(id:string):RecordData|null{requireStorageContext();const db=currentStorage();if(db)return (db.records.get(id) as RecordData)||null;const target=file(id);return existsSync(target)?JSON.parse(readFileSync(target,'utf8')):null;}
 export function manageAccess(input:{org:RecordData['org'];workspace:Record<string,unknown>;accessKey:string;action:string;password?:string}){
  if(!/^[a-f0-9]{64}$/.test(input.accessKey||''))throw new Error('Invalid admin access key.');
  const id=input.org?.id;let data=load(id);
@@ -160,10 +161,10 @@ export function inviteOrganization(token:string){
 
 export function isQuickOrganization(id:string){return !!load(id)?.org.quick;}
 
+function records():RecordData[]{requireStorageContext();const db=currentStorage();if(db)return [...db.records.values()] as RecordData[];return existsSync(root)?readdirSync(root).filter(n=>/^[a-f0-9-]{36}\.json$/.test(n)).map(n=>load(n.slice(0,-5))!):[];}
 export function organizationIndex(user:{email:string;name:string}){
- if(!existsSync(root))return [];
- return readdirSync(root).filter(name=>/^[a-f0-9-]{36}\.json$/.test(name)).flatMap(name=>{
-  const record=load(name.slice(0,-5))!;const member=(record.workspace as unknown as Workspace).members.find(m=>m.email===user.email);
+ return records().flatMap(record=>{
+ const member=(record.workspace as unknown as Workspace).members.find(m=>m.email===user.email);
   return member?[{id:record.org.id,name:record.org.name,code:record.org.code,quick:record.org.quick,role:member.role,invited:member.role!=='admin',visited:0}]:[];
  });
 }
@@ -177,7 +178,7 @@ export function createOrganization(name:string,password:string,user:{email:strin
 }
 export function joinOrganizationCode(code:string,password:string,user:{email:string;name:string}){
  if(typeof code!=='string'||typeof password!=='string'||password.length>128)throw new Error('Invalid code or password.');
- const record=existsSync(root)?readdirSync(root).filter(n=>/^[a-f0-9-]{36}\.json$/.test(n)).map(n=>load(n.slice(0,-5))!).find(r=>!r.org.quick&&r.org.code===code.trim().toUpperCase()):undefined;
+ const record=records().find(r=>!r.org.quick&&r.org.code===code.trim().toUpperCase());
  if(!record||pbkdf2Sync(password,record.org.id,100000,32,'sha256').toString('hex')!==record.org.passwordHash)throw new Error('Invalid code or password.');
  const workspace=record.workspace as unknown as Workspace;
  if(!workspace.members.some(m=>m.email===user.email)){workspace.members.push({id:randomUUID(),name:user.name,email:user.email,role:'member'});save(record.org.id,record);}

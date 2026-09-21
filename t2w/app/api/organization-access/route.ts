@@ -1,10 +1,12 @@
+import {withOrganizationStorage} from '../../lib/postgres-storage';
 import {NextRequest,NextResponse} from 'next/server';
 import {manageAccess,redeemInvite,quickAccess,regularAccess,inviteOrganization,isQuickOrganization,organizationIndex,createOrganization,joinOrganizationCode} from '../../lib/organization-access';
 export const runtime='nodejs';
 export async function POST(req:NextRequest){
  if(req.headers.get('origin')!==req.nextUrl.origin)return NextResponse.json({error:'Invalid origin.'},{status:403});
  try{
-  const input=await req.json();let google;
+  const input=await req.json();
+  return await withOrganizationStorage(input,async()=>{let google;
   const orgId=input.id||input.org?.id;
   const quickAdmin=['invite','password','show'].includes(input.action)&&orgId&&isQuickOrganization(orgId);
   const openQuick=input.action==='org-open'&&isQuickOrganization(orgId);
@@ -32,6 +34,7 @@ export async function POST(req:NextRequest){
   if(id&&quick){if(output.org?.accessKey||input.accessKey)cookie(`t2w-owner-${id}`,output.org?.accessKey||input.accessKey);if(output.session||input.session)cookie(`t2w-session-${id}`,output.session||input.session);if(output.token||input.token)cookie(`t2w-invite-${id}`,output.token||input.token);}
   if(input.action==='redeem'&&output.org?.quick)cookie(`t2w-invite-${id}`,input.token);
   return res;
+  });
  }catch(e){return NextResponse.json({error:e instanceof Error?e.message:'Unable to update organization access.'},{status:400});}
 }
 function publicInvite(token:string){const result=redeemInvite(token);return result.org.quick?result:{org:{id:result.org.id,name:result.org.name},role:'member'};}
