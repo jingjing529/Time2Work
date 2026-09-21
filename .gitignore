@@ -1,0 +1,11 @@
+
+**/__pycache__
+/data/*.json
+**/build
+# Runtime data and credentials stay outside Git
+server/data/*
+!server/data/.gitkeep
+.env*
+*.pem
+*.key
+t2w/
